@@ -1,0 +1,12 @@
+fastapi 
+uvicorn 
+jinja2
+httpx
+
+langchain 
+langchain-community 
+langchain-mcp-adapters 
+langgraph 
+python-dotenv
+pytz
+langchain[groq]
