@@ -19,3 +19,4 @@ class SchedulerState(BaseModel):
     rejected: List[str] = []
     final_slot: Optional[str]
     history: List[str] = []
+    _branch: Optional[str] = None

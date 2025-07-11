@@ -46,7 +46,7 @@ def build_scheduling_agents(day="2025-07-10") -> List[SchedulingAgent]:
         free_slots = get_free_slots(work_start, work_end, busy)
         agents.append(SchedulingAgent(p.name, free_slots, p.preferences))
     return agents
-
+# agents is list of objects
 
 class SchedulingWorkflow:
     def __init__(self):
@@ -73,11 +73,20 @@ class SchedulingWorkflow:
         builder.set_entry_point("Initiator")
         builder.add_edge("Initiator", "Responders")
         builder.add_edge("Responders", "Negotiator")
+        # builder.add_conditional_edges(
+        #             "Negotiator", {
+        #                 # "success": RunnableLambda(self.finalizer_node),
+        #                 # "conflict": RunnableLambda(self.llm_rescheduler_node)
+        #                 "success": 'Finalizer',
+        #                 "conflict": 'LLMRescheduler'
+        #                 })
+
         builder.add_conditional_edges(
                     "Negotiator",
+                    lambda state: state._branch,
                     {
-                        "success": RunnableLambda(self.finalizer_node),
-                        "conflict": RunnableLambda(self.llm_rescheduler_node)
+                        "success": "Finalizer",
+                        "conflict": "LLMRescheduler"
                     }
                 )
 
@@ -86,7 +95,7 @@ class SchedulingWorkflow:
 
         return builder.compile()
 
-    def initiator_node(self, state: SchedulerState):
+    def initiator_node(self, state: SchedulerState): # the first person who is starting the meeting as host
         initiator_agent = next(a for a in self.agents if a.name == state.initiator)
         if not state.proposed_slot:
             proposed_range = initiator_agent.propose_slots(initiator_agent.free_slots)
@@ -102,7 +111,7 @@ class SchedulingWorkflow:
         state.accepted.clear()
         state.rejected.clear()
         proposed_start = datetime.fromisoformat(state.proposed_slot)
-        proposed_end = proposed_start + timedelta(minutes=30)
+        proposed_end = proposed_start + timedelta(minutes=30)        # assuming all meetings lasts 30 min
         proposed_range = (proposed_start, proposed_end)
 
         for agent in self.agents:
@@ -122,12 +131,20 @@ class SchedulingWorkflow:
                 state.history.append(f"{agent.name} rejects {state.proposed_slot}")
         return state
 
+    # def consensus_check_node(self, state):
+    #     if len(state.rejected) == 0:
+    #         state.final_slot = state.proposed_slot
+    #         return {"__branch": "success", "final_slot": state.final_slot}
+    #     else:
+    #         return {"__branch": "conflict"}
     def consensus_check_node(self, state):
         if len(state.rejected) == 0:
             state.final_slot = state.proposed_slot
-            return {"__branch": "success", "final_slot": state.final_slot}
+            state._branch = "success"
         else:
-            return {"__branch": "conflict"}
+            state._branch = "conflict"
+        print(f"[consensus_check_node] Branch decided: {state._branch}")
+        return state
 
 
     def llm_rescheduler_node(self, state: SchedulerState):
@@ -159,7 +176,13 @@ class SchedulingWorkflow:
                 ])
         content = response.content.strip()
         # For simplicity, pick the first remaining slot
-        new_proposal = remaining_slots[0][0].isoformat()
+        # new_proposal = remaining_slots[0][0].isoformat() # modify here to use llm to pick the suitaible slot instead of just the first one
+        new_proposal = None
+        for slot in remaining_slots:
+            if slot[0].isoformat() in content:
+                new_proposal = slot[0].isoformat()
+                break
+
         state.proposed_slot = new_proposal
         state.history.append(content)
         return state
@@ -167,10 +190,12 @@ class SchedulingWorkflow:
     def finalizer_node(self, state: SchedulerState):
         if not state.final_slot:
             print("⚠️ No final_slot to confirm!")
-            return state
+            return state    
 
         # Parse the confirmed time as *naive* first
+        print(state.final_slot)
         confirmed_start = datetime.fromisoformat(state.final_slot or "2025-07-10T14:00")
+        print(confirmed_start)
         confirmed_end = confirmed_start + timedelta(minutes=30)
 
         for agent in self.agents:
@@ -182,7 +207,7 @@ class SchedulingWorkflow:
 
             updated = [
                 slot for slot in agent.free_slots
-                if not (slot[0] <= confirmed_start and slot[1] >= confirmed_end)
+                if not (slot[0] <= confirmed_start and slot[1] >= confirmed_end)  # updating the free slots availaibility for the agents by blocking the proposed time out of it.
             ]
             agent.free_slots = updated
 
